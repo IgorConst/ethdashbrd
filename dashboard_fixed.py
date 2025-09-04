@@ -6,14 +6,6 @@ from plotly.subplots import make_subplots
 import requests
 from datetime import datetime, timedelta
 import time
-import os
-
-# Check if OpenAI is available
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
 
 # Set page config
 st.set_page_config(
@@ -146,118 +138,6 @@ def get_eth_analysis():
         st.error(f"Error getting analysis: {e}")
         return None
 
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
-def get_ai_forecast():
-    """Get AI-powered ETH forecast"""
-    if not OPENAI_AVAILABLE or not os.getenv('OPENAI_API_KEY'):
-        return None
-    
-    try:
-        # Get current market data
-        analysis = get_eth_analysis()
-        if not analysis:
-            return None
-        
-        # Get additional market context
-        market_context = get_market_context()
-        
-        # Prepare prompt for OpenAI
-        prompt = f"""
-        As a crypto analyst, provide a concise forecast for Ethereum (ETH) based on current data:
-
-        Current Data:
-        - Price: ${analysis['price']:,.2f}
-        - 24h Change: {analysis['change_24h']:+.2f}%
-        - RSI: {analysis['rsi']}
-        - Volume: {analysis['volume_24h']:,.0f} ETH
-        - Market Context: {market_context}
-
-        Provide:
-        1. 4-hour forecast (BULLISH/BEARISH/NEUTRAL) with confidence %
-        2. 24-hour forecast (BULLISH/BEARISH/NEUTRAL) with confidence %
-        3. Key factors analysis (3-4 points)
-        4. Risk level (Low/Moderate/High)
-        5. Specific recommendation for ETH-USDC LP and GLV positions
-
-        Format as structured analysis, be concise and actionable.
-        """
-        
-        client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an expert cryptocurrency analyst providing concise, actionable forecasts."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=400,
-            temperature=0.3
-        )
-        
-        forecast_text = response.choices[0].message.content
-        
-        # Parse the response to extract key information
-        forecast_data = parse_ai_forecast(forecast_text)
-        forecast_data['full_analysis'] = forecast_text
-        forecast_data['timestamp'] = datetime.now().strftime('%H:%M:%S UTC')
-        
-        return forecast_data
-        
-    except Exception as e:
-        st.error(f"Error generating AI forecast: {e}")
-        return None
-
-def get_market_context():
-    """Get additional market context for AI analysis"""
-    try:
-        # Get ETH gas price (simplified)
-        url = "https://api.binance.com/api/v3/avgPrice"
-        params = {'symbol': 'ETHUSDT'}
-        response = requests.get(url, params=params, timeout=5)
-        
-        if response.status_code == 200:
-            return "Normal trading conditions"
-        else:
-            return "Limited market data available"
-    except:
-        return "Market data temporarily unavailable"
-
-def parse_ai_forecast(forecast_text):
-    """Parse AI forecast text to extract structured data"""
-    forecast_data = {
-        'forecast_4h': 'NEUTRAL',
-        'forecast_24h': 'NEUTRAL',
-        'confidence_4h': 50,
-        'confidence_24h': 50,
-        'risk_level': 'Moderate'
-    }
-    
-    try:
-        lines = forecast_text.lower()
-        
-        # Extract 4-hour forecast
-        if 'bullish' in lines and '4-hour' in lines or '4h' in lines:
-            forecast_data['forecast_4h'] = 'BULLISH'
-        elif 'bearish' in lines and ('4-hour' in lines or '4h' in lines):
-            forecast_data['forecast_4h'] = 'BEARISH'
-        
-        # Extract 24-hour forecast
-        if 'bullish' in lines and ('24-hour' in lines or '24h' in lines):
-            forecast_data['forecast_24h'] = 'BULLISH'
-        elif 'bearish' in lines and ('24-hour' in lines or '24h' in lines):
-            forecast_data['forecast_24h'] = 'BEARISH'
-        
-        # Extract risk level
-        if 'high' in lines and 'risk' in lines:
-            forecast_data['risk_level'] = 'High'
-        elif 'low' in lines and 'risk' in lines:
-            forecast_data['risk_level'] = 'Low'
-            
-    except:
-        pass
-    
-    return forecast_data
-
 def calculate_rsi(prices, period=14):
     """Calculate RSI"""
     if len(prices) < period + 1:
@@ -364,54 +244,10 @@ def create_volume_chart(volume_data):
     
     return fig
 
-def display_ai_forecast(forecast):
-    """Display AI forecast in a nice format"""
-    if not forecast:
-        st.warning("⚠️ AI forecasting unavailable. Set OPENAI_API_KEY to enable.")
-        return
-    
-    st.subheader("🤖 AI Forecasts")
-    
-    # Create columns for forecasts
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # 4-hour forecast
-        forecast_4h = forecast['forecast_4h']
-        if forecast_4h == 'BULLISH':
-            st.metric("4-Hour", "🟢 BULLISH", help="AI suggests upward movement")
-        elif forecast_4h == 'BEARISH':
-            st.metric("4-Hour", "🔴 BEARISH", help="AI suggests downward movement")
-        else:
-            st.metric("4-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement")
-    
-    with col2:
-        # 24-hour forecast
-        forecast_24h = forecast['forecast_24h']
-        if forecast_24h == 'BULLISH':
-            st.metric("24-Hour", "🟢 BULLISH", help="AI suggests upward movement")
-        elif forecast_24h == 'BEARISH':
-            st.metric("24-Hour", "🔴 BEARISH", help="AI suggests downward movement")  
-        else:
-            st.metric("24-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement")
-    
-    # Display detailed analysis
-    st.subheader("🔍 AI Analysis")
-    
-    with st.expander("View Detailed Analysis", expanded=True):
-        st.text(forecast['full_analysis'])
-    
-    # Risk level
-    risk_color = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}
-    risk_emoji = risk_color.get(forecast['risk_level'], "🟡")
-    st.metric("Risk Level", f"{risk_emoji} {forecast['risk_level']}")
-    
-    st.caption(f"AI Analysis updated: {forecast['timestamp']}")
-
 def main():
     # Title
     st.title("📈 ETH Analysis Dashboard")
-    st.markdown("Real-time cryptocurrency analysis with AI-powered forecasting")
+    st.markdown("Real-time cryptocurrency analysis and forecasting")
     
     # Sidebar
     with st.sidebar:
@@ -421,34 +257,11 @@ def main():
             st.cache_data.clear()
             st.rerun()
         
-        # AI Configuration
         st.markdown("---")
-        st.subheader("🤖 AI Settings")
-        
-        # Check OpenAI setup
-        ai_status = "❌ Not Available"
-        if OPENAI_AVAILABLE:
-            if os.getenv('OPENAI_API_KEY'):
-                ai_status = "✅ Active"
-                st.success("OpenAI API Connected")
-            else:
-                ai_status = "⚠️ API Key Missing"
-                st.warning("Set OPENAI_API_KEY for forecasts")
-                with st.expander("Setup Instructions"):
-                    st.code("export OPENAI_API_KEY='sk-your-key-here'")
-                    st.code("# or for Windows:")
-                    st.code("$env:OPENAI_API_KEY='sk-your-key-here'")
-        else:
-            st.error("OpenAI not installed")
-            st.code("pip install openai")
-        
-        st.info(f"**AI Status**: {ai_status}")
         st.info("**Data Source**: Binance API")
-        st.info("**Chart Update**: Every 5 minutes")
-        st.info("**AI Update**: Every 30 minutes")
+        st.info("**Update**: Every 5 minutes")
     
-    # Main content layout
-    # Row 1: Chart and current analysis
+    # Main content
     col1, col2 = st.columns([3, 1])
     
     with col1:
@@ -466,7 +279,7 @@ def main():
             st.error("Could not load candlestick data")
     
     with col2:
-        st.subheader("💹 Current Metrics")
+        st.subheader("🔍 Current Analysis")
         
         # Load current analysis
         analysis = get_eth_analysis()
@@ -496,17 +309,7 @@ def main():
         else:
             st.error("Could not load analysis data")
     
-    # Row 2: AI Forecasting Section
-    st.markdown("---")
-    
-    # Load and display AI forecast
-    with st.spinner("Generating AI forecast..."):
-        forecast = get_ai_forecast()
-    
-    display_ai_forecast(forecast)
-    
-    # Row 3: Volume comparison section
-    st.markdown("---")
+    # Volume comparison section
     st.subheader("📊 Volume Comparison")
     
     with st.spinner("Loading volume data..."):
