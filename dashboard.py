@@ -188,6 +188,25 @@ def convert_cryptocompare_data(data):
         ])
     return converted_data
 
+def get_deepseek_api_key():
+    """Get Deepseek API key from multiple possible sources"""
+    # Try Streamlit secrets first
+    try:
+        if hasattr(st, 'secrets'):
+            if 'DEEPSEEK_API_KEY' in st.secrets:
+                return st.secrets['DEEPSEEK_API_KEY']
+            elif 'api_keys' in st.secrets and 'DEEPSEEK_API_KEY' in st.secrets['api_keys']:
+                return st.secrets['api_keys']['DEEPSEEK_API_KEY']
+    except:
+        pass
+    
+    # Try environment variable
+    api_key = os.getenv('DEEPSEEK_API_KEY')
+    if api_key:
+        return api_key
+    
+    return None
+
 # Cache functions to avoid repeated API calls
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def fetch_eth_candlestick_data():
@@ -221,6 +240,9 @@ def fetch_eth_candlestick_data():
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = df[col].astype(float)
         
+        # Add source information to dataframe
+        df['data_source'] = source
+        
         return df
         
     except Exception as e:
@@ -240,7 +262,8 @@ def fetch_crypto_volumes():
         volumes = [np.random.normal(1000000, 200000) for _ in range(3)]
         volume_data[crypto] = {
             'dates': dates,
-            'volumes': volumes
+            'volumes': volumes,
+            'source': 'demo'  # Mark as demo data
         }
     
     return volume_data
@@ -287,17 +310,14 @@ def get_eth_analysis():
 
 @st.cache_data(ttl=1800)  # Cache for 30 minutes
 def get_ai_forecast():
-    """Get AI-powered ETH forecast"""
-    # Check if OpenAI is properly configured
-    if not OPENAI_AVAILABLE:
+    """Get AI-powered ETH forecast using Deepseek"""
+    # Get API key from multiple sources
+    api_key = get_deepseek_api_key()
+    
+    if not api_key or not OPENAI_AVAILABLE:
         return None
     
     try:
-        # Check if API key is set
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            return None
-        
         # Get current market data
         analysis = get_eth_analysis()
         if not analysis:
@@ -306,7 +326,7 @@ def get_ai_forecast():
         # Get additional market context
         market_context = get_market_context()
         
-        # Prepare prompt for OpenAI
+        # Prepare prompt for Deepseek
         prompt = f"""
         As a crypto analyst, provide a concise forecast for Ethereum (ETH) based on current data:
 
@@ -327,10 +347,14 @@ def get_ai_forecast():
         Format as structured analysis, be concise and actionable.
         """
         
-        client = openai.OpenAI(api_key=api_key)
+        # Create Deepseek client with correct base URL
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url="https://api.deepseek.com/v1"
+        )
         
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "You are an expert cryptocurrency analyst providing concise, actionable forecasts."},
                 {"role": "user", "content": prompt}
@@ -345,12 +369,17 @@ def get_ai_forecast():
         forecast_data = parse_ai_forecast(forecast_text)
         forecast_data['full_analysis'] = forecast_text
         forecast_data['timestamp'] = datetime.now().strftime('%H:%M:%S UTC')
+        forecast_data['source'] = 'deepseek'
         
         return forecast_data
         
     except Exception as e:
-        # Don't show error if it's just missing API key
-        if "No API key provided" not in str(e):
+        # Handle specific Deepseek errors
+        if "Insufficient Balance" in str(e):
+            st.warning("⚠️ Deepseek API: Insufficient balance. Please add credits to your account.")
+        elif "401" in str(e):
+            st.warning("⚠️ Deepseek API: Invalid API key. Please check your credentials.")
+        else:
             st.error(f"Error generating AI forecast: {e}")
         return None
 
@@ -378,7 +407,8 @@ def parse_ai_forecast(forecast_text):
         'forecast_24h': 'NEUTRAL',
         'confidence_4h': 50,
         'confidence_24h': 50,
-        'risk_level': 'Moderate'
+        'risk_level': 'Moderate',
+        'source': 'demo'  # Default to demo if parsing fails
     }
     
     try:
@@ -428,17 +458,33 @@ def calculate_rsi(prices, period=14):
     return round(rsi, 1)
 
 def create_candlestick_chart(df):
-    """Create candlestick chart"""
+    """Create candlestick chart with visual indicators for demo data"""
     if df.empty:
         st.warning("No candlestick data available")
         return None
     
+    # Check if using demo data
+    is_demo = 'data_source' in df and df['data_source'].iloc[0] == 'demo'
+    
     fig = make_subplots(
         rows=2, cols=1,
-        subplot_titles=('ETH/USDT - 15min Candlesticks (24h)', 'Volume'),
+        subplot_titles=(
+            f"ETH/USDT - 15min Candlesticks (24h) {'📊 [DEMO DATA]' if is_demo else ''}", 
+            f"Volume {'📊 [DEMO DATA]' if is_demo else ''}"
+        ),
         vertical_spacing=0.1,
         row_heights=[0.7, 0.3]
     )
+    
+    # Use different colors for demo data
+    if is_demo:
+        # Demo data - use lighter, less saturated colors
+        candlestick_color = 'rgba(100,100,100,0.7)'
+        volume_color = 'rgba(150,150,250,0.4)'
+    else:
+        # Real data - use normal colors
+        candlestick_color = None
+        volume_color = 'rgba(0,150,250,0.6)'
     
     # Candlestick
     fig.add_trace(
@@ -448,7 +494,9 @@ def create_candlestick_chart(df):
             high=df['high'],
             low=df['low'],
             close=df['close'],
-            name='ETH/USDT'
+            name='ETH/USDT',
+            increasing_line_color= candlestick_color or '#2CA02C',
+            decreasing_line_color= candlestick_color or '#D62728'
         ),
         row=1, col=1
     )
@@ -459,13 +507,13 @@ def create_candlestick_chart(df):
             x=df['timestamp'],
             y=df['volume'],
             name='Volume',
-            marker_color='rgba(0,150,250,0.6)'
+            marker_color=volume_color
         ),
         row=2, col=1
     )
     
     fig.update_layout(
-        title="ETH Trading Chart",
+        title=f"ETH Trading Chart {'📊 [DEMO DATA]' if is_demo else ''}",
         xaxis_rangeslider_visible=False,
         height=600,
         showlegend=False
@@ -474,10 +522,14 @@ def create_candlestick_chart(df):
     return fig
 
 def create_volume_chart(volume_data):
-    """Create volume comparison chart"""
+    """Create volume comparison chart with visual indicators"""
     if not volume_data:
         st.warning("No volume data available")
         return None
+    
+    # Check if using demo data
+    is_demo = any('source' in volume_data[crypto] and volume_data[crypto]['source'] == 'demo' 
+                 for crypto in volume_data if crypto in volume_data)
     
     fig = go.Figure()
     
@@ -485,7 +537,11 @@ def create_volume_chart(volume_data):
     first_crypto = list(volume_data.keys())[0]
     dates = volume_data[first_crypto]['dates']
     
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+    # Use different colors for demo data
+    if is_demo:
+        colors = ['#888888', '#aaaaaa', '#cccccc']  # Grayscale for demo
+    else:
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
     
     for i, date in enumerate(dates):
         crypto_names = []
@@ -500,12 +556,13 @@ def create_volume_chart(volume_data):
                 name=date,
                 x=crypto_names,
                 y=volumes,
-                marker_color=colors[i % len(colors)]
+                marker_color=colors[i % len(colors)],
+                opacity=0.6 if is_demo else 0.8
             )
         )
     
     fig.update_layout(
-        title="Volume Comparison - Top 5 Cryptocurrencies (Last 3 Days)",
+        title=f"Volume Comparison - Top 5 Cryptocurrencies (Last 3 Days) {'📊 [DEMO DATA]' if is_demo else ''}",
         xaxis_title="Cryptocurrency",
         yaxis_title="Volume (Millions)",
         barmode='group',
@@ -517,10 +574,16 @@ def create_volume_chart(volume_data):
 def display_ai_forecast(forecast):
     """Display AI forecast in a nice format"""
     if not forecast:
-        st.warning("⚠️ AI forecasting unavailable. Set OPENAI_API_KEY to enable.")
+        st.warning("⚠️ AI forecasting unavailable. Set DEEPSEEK_API_KEY to enable.")
         return
     
     st.subheader("🤖 AI Forecasts")
+    
+    # Check if using demo data (due to API failure)
+    is_demo = forecast.get('source') == 'demo'
+    
+    if is_demo:
+        st.warning("📊 Using demo forecast data (API unavailable)")
     
     # Create columns for forecasts
     col1, col2 = st.columns(2)
@@ -529,32 +592,34 @@ def display_ai_forecast(forecast):
         # 4-hour forecast
         forecast_4h = forecast['forecast_4h']
         if forecast_4h == 'BULLISH':
-            st.metric("4-Hour", "🟢 BULLISH", help="AI suggests upward movement")
+            st.metric("4-Hour", "🟢 BULLISH", help="AI suggests upward movement", delta_color="off" if is_demo else "normal")
         elif forecast_4h == 'BEARISH':
-            st.metric("4-Hour", "🔴 BEARISH", help="AI suggests downward movement")
+            st.metric("4-Hour", "🔴 BEARISH", help="AI suggests downward movement", delta_color="off" if is_demo else "normal")
         else:
-            st.metric("4-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement")
+            st.metric("4-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement", delta_color="off" if is_demo else "normal")
     
     with col2:
         # 24-hour forecast
         forecast_24h = forecast['forecast_24h']
         if forecast_24h == 'BULLISH':
-            st.metric("24-Hour", "🟢 BULLISH", help="AI suggests upward movement")
+            st.metric("24-Hour", "🟢 BULLISH", help="AI suggests upward movement", delta_color="off" if is_demo else "normal")
         elif forecast_24h == 'BEARISH':
-            st.metric("24-Hour", "🔴 BEARISH", help="AI suggests downward movement")  
+            st.metric("24-Hour", "🔴 BEARISH", help="AI suggests downward movement", delta_color="off" if is_demo else "normal")  
         else:
-            st.metric("24-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement")
+            st.metric("24-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement", delta_color="off" if is_demo else "normal")
     
     # Display detailed analysis
     st.subheader("🔍 AI Analysis")
     
     with st.expander("View Detailed Analysis", expanded=True):
+        if is_demo:
+            st.warning("📊 This is demo analysis data (API unavailable)")
         st.text(forecast['full_analysis'])
     
     # Risk level
     risk_color = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}
     risk_emoji = risk_color.get(forecast['risk_level'], "🟡")
-    st.metric("Risk Level", f"{risk_emoji} {forecast['risk_level']}")
+    st.metric("Risk Level", f"{risk_emoji} {forecast['risk_level']}", delta_color="off" if is_demo else "normal")
     
     st.caption(f"AI Analysis updated: {forecast['timestamp']}")
 
@@ -563,7 +628,8 @@ def main():
     st.title("📈 ETH Analysis Dashboard")
     st.markdown("Real-time cryptocurrency analysis with AI-powered forecasting")
     
-    # Display current data source
+    # Display current data source with visual indicator
+    source = st.session_state.data_source
     source_status = {
         "binance": "✅ Binance API",
         "cryptocompare": "⚠️ CryptoCompare (Fallback)",
@@ -571,10 +637,10 @@ def main():
         "binance_blocked": "❌ Binance Blocked"
     }
     
-    st.sidebar.info(f"**Data Source**: {source_status.get(st.session_state.data_source, 'Unknown')}")
+    st.sidebar.info(f"**Data Source**: {source_status.get(source, 'Unknown')}")
     
-    if st.session_state.data_source == "demo":
-        st.sidebar.warning("Using demo data - Binance API is blocked")
+    if source == "demo":
+        st.sidebar.warning("📊 Using demo data - APIs are blocked")
     
     # Sidebar
     with st.sidebar:
@@ -591,18 +657,19 @@ def main():
         # Check OpenAI setup
         ai_status = "❌ Not Available"
         if OPENAI_AVAILABLE:
-            if os.getenv('OPENAI_API_KEY'):
-                ai_status = "✅ Active"
-                st.success("OpenAI API Connected")
+            api_key = get_deepseek_api_key()
+            if api_key:
+                ai_status = "✅ Active (Deepseek)"
+                st.success("Deepseek API Connected")
             else:
                 ai_status = "⚠️ API Key Missing"
-                st.warning("Set OPENAI_API_KEY for forecasts")
+                st.warning("Set DEEPSEEK_API_KEY for AI forecasts")
                 with st.expander("Setup Instructions"):
-                    st.code("export OPENAI_API_KEY='sk-your-key-here'")
-                    st.code("# or for Windows:")
-                    st.code("$env:OPENAI_API_KEY='sk-your-key-here'")
+                    st.code("export DEEPSEEK_API_KEY='your-deepseek-key'")
+                    st.code("# or in Streamlit Cloud Secrets:")
+                    st.code("DEEPSEEK_API_KEY = 'your-deepseek-key'")
         else:
-            st.error("OpenAI not installed")
+            st.error("OpenAI package not installed")
             st.code("pip install openai")
         
         st.info(f"**AI Status**: {ai_status}")
@@ -639,28 +706,36 @@ def main():
             change = float(analysis['change_24h'])
             volume = float(analysis['volume_24h'])
             
+            # Check if demo data
+            is_demo = analysis.get('source') == 'demo'
+            
             st.metric(
                 label="ETH Price",
                 value=f"${price:,.2f}",
-                delta=f"{change:+.2f}%"
+                delta=f"{change:+.2f}%",
+                delta_color="off" if is_demo else "normal"
             )
             
             st.metric(
                 label="24h Volume",
-                value=f"{volume/1000:.0f}K ETH"
+                value=f"{volume/1000:.0f}K ETH",
+                delta_color="off" if is_demo else "normal"
             )
             
             # RSI with color coding
             rsi = analysis['rsi']
             if rsi > 70:
-                st.metric("RSI", f"{rsi} 🔴", help="Overbought")
+                st.metric("RSI", f"{rsi} 🔴", help="Overbought", delta_color="off" if is_demo else "normal")
             elif rsi < 30:
-                st.metric("RSI", f"{rsi} 🟢", help="Oversold") 
+                st.metric("RSI", f"{rsi} 🟢", help="Oversold", delta_color="off" if is_demo else "normal") 
             else:
-                st.metric("RSI", f"{rsi} 🟡", help="Neutral")
+                st.metric("RSI", f"{rsi} 🟡", help="Neutral", delta_color="off" if is_demo else "normal")
             
             st.caption(f"Updated: {analysis['timestamp']}")
-            st.caption(f"Source: {analysis.get('source', 'Unknown')}")
+            if is_demo:
+                st.caption("📊 Demo data - APIs unavailable")
+            else:
+                st.caption(f"Source: {analysis.get('source', 'Unknown')}")
         else:
             st.error("Could not load analysis data")
     
@@ -673,7 +748,22 @@ def main():
         with st.spinner("Generating AI forecast..."):
             forecast = get_ai_forecast()
         
-        display_ai_forecast(forecast)
+        if forecast:
+            display_ai_forecast(forecast)
+        else:
+            # Show demo forecast if API fails
+            st.warning("⚠️ Using demo forecast data (API unavailable)")
+            demo_forecast = {
+                'forecast_4h': 'NEUTRAL',
+                'forecast_24h': 'NEUTRAL', 
+                'confidence_4h': 50,
+                'confidence_24h': 50,
+                'risk_level': 'Moderate',
+                'full_analysis': "Demo analysis: Market conditions suggest sideways movement. Monitor key support and resistance levels.",
+                'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
+                'source': 'demo'
+            }
+            display_ai_forecast(demo_forecast)
     else:
         st.markdown("---")
         st.info("🤖 Install OpenAI package for AI forecasting: `pip install openai`")
