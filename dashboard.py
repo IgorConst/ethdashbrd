@@ -308,7 +308,7 @@ def get_eth_analysis():
         st.error(f"Error getting analysis: {e}")
         return None
 
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
+@st.cache_data(ttl=14400)  # Cache for 4h (30 minutes)
 def get_ai_forecast():
     """Get AI-powered ETH forecast using Deepseek"""
     # Get API key from multiple sources
