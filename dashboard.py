@@ -19,20 +19,33 @@ except ImportError:
 
 # Set page config
 st.set_page_config(
-    page_title="ETH Analysis Dashboard",
+    page_title="Crypto Analysis Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-# Global variable to track which data source is working
+# Global variables
 if 'data_source' not in st.session_state:
-    st.session_state.data_source = "binance"  # Default source
+    st.session_state.data_source = "binance"
+if 'selected_coin' not in st.session_state:
+    st.session_state.selected_coin = "ETHUSDT"
+if 'show_ai_forecast' not in st.session_state:
+    st.session_state.show_ai_forecast = False
+
+# Available coins for trading view
+CRYPTO_SYMBOLS = {
+    "ETHUSDT": "Ethereum",
+    "BTCUSDT": "Bitcoin", 
+    "BNBUSDT": "BNB",
+    "ADAUSDT": "Cardano",
+    "SOLUSDT": "Solana"
+}
 
 # Create a robust session with retries
 def create_robust_session():
     session = requests.Session()
     retry_strategy = Retry(
-        total=2,  # Reduced retries
+        total=2,
         backoff_factor=0.3,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"]
@@ -46,13 +59,13 @@ def create_robust_session():
 def get_data_with_fallbacks(url, params=None, data_type="klines"):
     """Try multiple sources until one works"""
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json',
     }
     
     session = create_robust_session()
     
-    # Try Binance first (but skip if we know it's blocked)
+    # Try Binance first
     if st.session_state.data_source != "binance_blocked":
         try:
             response = session.get(url, params=params, headers=headers, timeout=10)
@@ -62,16 +75,18 @@ def get_data_with_fallbacks(url, params=None, data_type="klines"):
         except Exception as e:
             st.session_state.data_source = "binance_blocked"
     
-    # Try CryptoCompare for all data types
+    # Try CryptoCompare
     try:
         if data_type == "klines":
-            # Get ETH data from CryptoCompare
+            symbol = params.get('symbol', 'ETHUSDT')
+            fsym = symbol.replace('USDT', '')
+            
             cryptocompare_url = "https://min-api.cryptocompare.com/data/v2/histominute"
             cryptocompare_params = {
-                'fsym': 'ETH',
+                'fsym': fsym,
                 'tsym': 'USD',
-                'limit': 96,  # 96 periods of 15min = 24 hours
-                'aggregate': 15  # 15-minute intervals
+                'limit': 96,
+                'aggregate': 15
             }
             
             response = session.get(cryptocompare_url, params=cryptocompare_params, headers=headers, timeout=10)
@@ -83,33 +98,27 @@ def get_data_with_fallbacks(url, params=None, data_type="klines"):
                 return data['Data']['Data'], "cryptocompare"
                 
         elif data_type == "ticker":
-            # Get current ETH price from CryptoCompare
+            symbol = params.get('symbol', 'ETHUSDT')
+            fsym = symbol.replace('USDT', '')
+            
             cryptocompare_url = "https://min-api.cryptocompare.com/data/price"
-            cryptocompare_params = {
-                'fsym': 'ETH',
-                'tsym': 'USD'
-            }
+            cryptocompare_params = {'fsym': fsym, 'tsym': 'USD'}
             
             response = session.get(cryptocompare_url, params=cryptocompare_params, headers=headers, timeout=10)
             response.raise_for_status()
             price_data = response.json()
             
-            # Get 24h change
             change_url = "https://min-api.cryptocompare.com/data/pricemultifull"
-            change_params = {
-                'fsyms': 'ETH',
-                'tsyms': 'USD'
-            }
+            change_params = {'fsyms': fsym, 'tsyms': 'USD'}
             
             change_response = session.get(change_url, params=change_params, headers=headers, timeout=10)
             change_response.raise_for_status()
             change_data = change_response.json()
             
-            # Format as Binance-like response
             formatted_data = {
                 'lastPrice': price_data['USD'],
-                'priceChangePercent': change_data['RAW']['ETH']['USD']['CHANGEPCT24HOUR'],
-                'volume': change_data['RAW']['ETH']['USD']['VOLUME24HOUR']
+                'priceChangePercent': change_data['RAW'][fsym]['USD']['CHANGEPCT24HOUR'],
+                'volume': change_data['RAW'][fsym]['USD']['VOLUME24HOUR']
             }
             
             st.session_state.data_source = "cryptocompare"
@@ -121,41 +130,40 @@ def get_data_with_fallbacks(url, params=None, data_type="klines"):
     # If all APIs fail, return demo data
     return generate_demo_data(data_type), "demo"
 
-def generate_demo_data(data_type):
+def generate_demo_data(data_type, symbol="ETHUSDT"):
     """Generate demo data when all APIs fail"""
+    base_price = 2500 if "ETH" in symbol else 50000 if "BTC" in symbol else 300 if "BNB" in symbol else 0.5 if "ADA" in symbol else 100
+    
     if data_type == "klines":
-        # Generate demo candlestick data
         now = datetime.now()
         timestamps = [now - timedelta(minutes=15*i) for i in range(96)]
         timestamps.reverse()
         
-        base_price = 2500 + np.random.normal(0, 50)
         demo_data = []
         
         for i, ts in enumerate(timestamps):
-            open_price = base_price + np.random.normal(0, 20)
-            close_price = open_price + np.random.normal(0, 30)
-            high_price = max(open_price, close_price) + abs(np.random.normal(0, 15))
-            low_price = min(open_price, close_price) - abs(np.random.normal(0, 15))
+            open_price = base_price + np.random.normal(0, base_price*0.02)
+            close_price = open_price + np.random.normal(0, base_price*0.03)
+            high_price = max(open_price, close_price) + abs(np.random.normal(0, base_price*0.01))
+            low_price = min(open_price, close_price) - abs(np.random.normal(0, base_price*0.01))
             volume = np.random.normal(50000, 10000)
             
             demo_data.append([
-                int(ts.timestamp() * 1000),  # timestamp in ms
+                int(ts.timestamp() * 1000),
                 open_price, high_price, low_price, close_price,
-                volume,  # volume
-                int(ts.timestamp() * 1000),  # close_time
-                volume * close_price,  # quote_volume
-                1000,  # trades
-                50000,  # taker_buy_base
-                50000 * close_price,  # taker_buy_quote
-                0  # ignore
+                volume,
+                int(ts.timestamp() * 1000),
+                volume * close_price,
+                1000,
+                50000,
+                50000 * close_price,
+                0
             ])
         
         return demo_data
         
     elif data_type == "ticker":
-        # Generate demo ticker data
-        price = 2500 + np.random.normal(0, 50)
+        price = base_price + np.random.normal(0, base_price*0.02)
         change = np.random.normal(0, 2)
         volume = 50000 + np.random.normal(0, 10000)
         
@@ -173,48 +181,39 @@ def convert_cryptocompare_data(data):
     converted_data = []
     for item in data:
         converted_data.append([
-            item['time'] * 1000,  # timestamp in ms
-            item['open'],         # open
-            item['high'],         # high
-            item['low'],          # low
-            item['close'],        # close
-            item['volumeto'],     # volume
-            item['time'] * 1000,  # close_time
-            item['volumefrom'],   # quote_volume
-            0,                    # trades (not available)
-            0,                    # taker_buy_base (not available)
-            0,                    # taker_buy_quote (not available)
-            0                     # ignore
+            item['time'] * 1000,
+            item['open'],
+            item['high'],
+            item['low'],
+            item['close'],
+            item['volumeto'],
+            item['time'] * 1000,
+            item['volumefrom'],
+            0, 0, 0, 0
         ])
     return converted_data
 
-def get_deepseek_api_key():
-    """Get Deepseek API key from multiple possible sources"""
-    # Try Streamlit secrets first
+def get_groq_api_key():
+    """Get Groq API key from multiple sources"""
     try:
         if hasattr(st, 'secrets'):
-            if 'DEEPSEEK_API_KEY' in st.secrets:
-                return st.secrets['DEEPSEEK_API_KEY']
-            elif 'api_keys' in st.secrets and 'DEEPSEEK_API_KEY' in st.secrets['api_keys']:
-                return st.secrets['api_keys']['DEEPSEEK_API_KEY']
+            if 'GROQ_API_KEY' in st.secrets:
+                return st.secrets['GROQ_API_KEY']
+            elif 'api_keys' in st.secrets and 'GROQ_API_KEY' in st.secrets['api_keys']:
+                return st.secrets['api_keys']['GROQ_API_KEY']
     except:
         pass
     
-    # Try environment variable
-    api_key = os.getenv('DEEPSEEK_API_KEY')
-    if api_key:
-        return api_key
-    
-    return None
+    return os.getenv('GROQ_API_KEY')
 
-# Cache functions to avoid repeated API calls
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def fetch_eth_candlestick_data():
-    """Fetch 1-day ETH candlestick data with fallbacks"""
+# Cache functions
+@st.cache_data(ttl=300)
+def fetch_candlestick_data(symbol="ETHUSDT"):
+    """Fetch candlestick data for selected coin"""
     try:
         url = "https://api.binance.com/api/v3/klines"
         params = {
-            'symbol': 'ETHUSDT',
+            'symbol': symbol,
             'interval': '15m',
             'limit': 96
         }
@@ -224,37 +223,31 @@ def fetch_eth_candlestick_data():
         if data is None:
             return pd.DataFrame()
         
-        # Handle different data formats based on source
         if source == "cryptocompare":
             data = convert_cryptocompare_data(data)
         
-        # Convert to DataFrame
         df = pd.DataFrame(data, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
             'close_time', 'quote_volume', 'trades', 'taker_buy_base',
             'taker_buy_quote', 'ignore'
         ])
         
-        # Convert types
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         for col in ['open', 'high', 'low', 'close', 'volume']:
             df[col] = df[col].astype(float)
         
-        # Add source information to dataframe
         df['data_source'] = source
-        
         return df
         
     except Exception as e:
         st.error(f"Error processing candlestick data: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600)
 def fetch_crypto_volumes():
-    """Fetch volume data for top 5 cryptos with fallbacks"""
+    """Fetch volume data for top 5 cryptos"""
     cryptos = ['Bitcoin', 'Ethereum', 'BNB', 'Cardano', 'Solana']
     
-    # Generate demo volume data since Binance is blocked
     volume_data = {}
     dates = [(datetime.now() - timedelta(days=i)).strftime('%m-%d') for i in range(3)]
     
@@ -263,34 +256,30 @@ def fetch_crypto_volumes():
         volume_data[crypto] = {
             'dates': dates,
             'volumes': volumes,
-            'source': 'demo'  # Mark as demo data
+            'source': 'demo'
         }
     
     return volume_data
 
-@st.cache_data(ttl=60)  # Cache for 1 minute
-def get_eth_analysis():
-    """Get current ETH analysis with fallbacks"""
+@st.cache_data(ttl=60)
+def get_crypto_analysis(symbol="ETHUSDT"):
+    """Get current analysis for selected crypto"""
     try:
-        # Current ticker data
         url = "https://api.binance.com/api/v3/ticker/24hr"
-        params = {'symbol': 'ETHUSDT'}
+        params = {'symbol': symbol}
         
         data, source = get_data_with_fallbacks(url, params, "ticker")
         
         if data is None:
             return None
         
-        # Ensure all values are numbers, not strings
         price = float(data['lastPrice'])
         change = float(data.get('priceChangePercent', 0))
         volume = float(data.get('volume', 50000))
         
-        # For demo data, generate some historical prices for RSI calculation
         if source == "demo":
-            prices = [price + np.random.normal(0, 20) for _ in range(30)]
+            prices = [price + np.random.normal(0, price*0.02) for _ in range(30)]
         else:
-            # For real data, we'd fetch historical prices
             prices = [price]
         
         rsi = calculate_rsi(prices)
@@ -301,137 +290,128 @@ def get_eth_analysis():
             'volume_24h': volume,
             'rsi': rsi,
             'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
-            'source': source
+            'source': source,
+            'symbol': symbol
         }
         
     except Exception as e:
         st.error(f"Error getting analysis: {e}")
         return None
 
-@st.cache_data(ttl=14400)  # Cache for 4h (30 minutes)
 def get_ai_forecast():
-    """Get AI-powered ETH forecast using Deepseek"""
-    # Get API key from multiple sources
-    api_key = get_deepseek_api_key()
+    """Get AI-powered forecast using Groq"""
+    api_key = get_groq_api_key()
     
-    if not api_key or not OPENAI_AVAILABLE:
-        return None
+    if not api_key:
+        return generate_demo_forecast()
     
     try:
-        # Get current market data
-        analysis = get_eth_analysis()
+        analysis = get_crypto_analysis(st.session_state.selected_coin)
         if not analysis:
-            return None
+            return generate_demo_forecast()
         
-        # Get additional market context
         market_context = get_market_context()
+        coin_name = CRYPTO_SYMBOLS.get(st.session_state.selected_coin, st.session_state.selected_coin)
         
-        # Prepare prompt for Deepseek
         prompt = f"""
-        As a crypto analyst, provide a concise forecast for Ethereum (ETH) based on current data:
+        As a crypto analyst, provide a concise forecast for {coin_name} based on current data:
 
         Current Data:
         - Price: ${analysis['price']:,.2f}
         - 24h Change: {analysis['change_24h']:+.2f}%
         - RSI: {analysis['rsi']}
-        - Volume: {analysis['volume_24h']:,.0f} ETH
+        - Volume: {analysis['volume_24h']:,.0f}
         - Market Context: {market_context}
 
-        Provide:
-        1. 4-hour forecast (BULLISH/BEARISH/NEUTRAL) with confidence %
-        2. 24-hour forecast (BULLISH/BEARISH/NEUTRAL) with confidence %
-        3. Key factors analysis (3-4 points)
-        4. Risk level (Low/Moderate/High)
-        5. Specific recommendation for ETH-USDC LP and GLV positions
-
-        Format as structured analysis, be concise and actionable.
+        Provide concise 4-hour and 24-hour forecasts with key factors and risk level.
         """
         
-        # Create Deepseek client with correct base URL
-        client = openai.OpenAI(
-            api_key=api_key,
-            base_url="https://api.deepseek.com/v1"
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content": "You are an expert cryptocurrency analyst providing concise, actionable forecasts."},
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": 300,
+                "temperature": 0.3
+            },
+            timeout=30
         )
         
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "You are an expert cryptocurrency analyst providing concise, actionable forecasts."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=400,
-            temperature=0.3
-        )
-        
-        forecast_text = response.choices[0].message.content
-        
-        # Parse the response to extract key information
-        forecast_data = parse_ai_forecast(forecast_text)
-        forecast_data['full_analysis'] = forecast_text
-        forecast_data['timestamp'] = datetime.now().strftime('%H:%M:%S UTC')
-        forecast_data['source'] = 'deepseek'
-        
-        return forecast_data
-        
-    except Exception as e:
-        # Handle specific Deepseek errors
-        if "Insufficient Balance" in str(e):
-            st.warning("⚠️ Deepseek API: Insufficient balance. Please add credits to your account.")
-        elif "401" in str(e):
-            st.warning("⚠️ Deepseek API: Invalid API key. Please check your credentials.")
+        if response.status_code == 200:
+            data = response.json()
+            forecast_text = data['choices'][0]['message']['content']
+            
+            forecast_data = parse_ai_forecast(forecast_text)
+            forecast_data['full_analysis'] = forecast_text
+            forecast_data['timestamp'] = datetime.now().strftime('%H:%M:%S UTC')
+            forecast_data['source'] = 'groq'
+            return forecast_data
         else:
-            st.error(f"Error generating AI forecast: {e}")
-        return None
+            return generate_demo_forecast()
+            
+    except Exception as e:
+        st.warning(f"AI service temporarily unavailable")
+        return generate_demo_forecast()
+
+def generate_demo_forecast():
+    """Generate demo forecast"""
+    coin_name = CRYPTO_SYMBOLS.get(st.session_state.selected_coin, st.session_state.selected_coin)
+    return {
+        'forecast_4h': 'NEUTRAL',
+        'forecast_24h': 'NEUTRAL', 
+        'confidence_4h': 50,
+        'confidence_24h': 50,
+        'risk_level': 'Moderate',
+        'full_analysis': f"Demo analysis for {coin_name}: Current market conditions suggest sideways movement. Monitor key support and resistance levels for breakout opportunities.",
+        'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
+        'source': 'demo'
+    }
 
 def get_market_context():
-    """Get additional market context for AI analysis"""
-    try:
-        # Get market status based on which data source is working
-        source = st.session_state.data_source
-        
-        if source == "binance":
-            return "Normal trading conditions - Binance API"
-        elif source == "cryptocompare":
-            return "Using fallback data - CryptoCompare API"
-        elif source == "demo":
-            return "Using demo data - All APIs blocked"
-        else:
-            return "Limited market data available"
-    except:
+    """Get market context"""
+    source = st.session_state.data_source
+    if source == "binance":
+        return "Normal trading conditions"
+    elif source == "cryptocompare":
+        return "Using fallback data"
+    elif source == "demo":
+        return "Using demo data - APIs blocked"
+    else:
         return "Market data temporarily unavailable"
 
 def parse_ai_forecast(forecast_text):
-    """Parse AI forecast text to extract structured data"""
+    """Parse AI forecast text"""
     forecast_data = {
         'forecast_4h': 'NEUTRAL',
         'forecast_24h': 'NEUTRAL',
         'confidence_4h': 50,
         'confidence_24h': 50,
-        'risk_level': 'Moderate',
-        'source': 'demo'  # Default to demo if parsing fails
+        'risk_level': 'Moderate'
     }
     
     try:
         lines = forecast_text.lower()
-        
-        # Extract 4-hour forecast
-        if 'bullish' in lines and '4-hour' in lines or '4h' in lines:
+        if 'bullish' in lines and ('4-hour' in lines or '4h' in lines):
             forecast_data['forecast_4h'] = 'BULLISH'
         elif 'bearish' in lines and ('4-hour' in lines or '4h' in lines):
             forecast_data['forecast_4h'] = 'BEARISH'
         
-        # Extract 24-hour forecast
         if 'bullish' in lines and ('24-hour' in lines or '24h' in lines):
             forecast_data['forecast_24h'] = 'BULLISH'
         elif 'bearish' in lines and ('24-hour' in lines or '24h' in lines):
             forecast_data['forecast_24h'] = 'BEARISH'
         
-        # Extract risk level
         if 'high' in lines and 'risk' in lines:
             forecast_data['risk_level'] = 'High'
         elif 'low' in lines and 'risk' in lines:
             forecast_data['risk_level'] = 'Low'
-            
     except:
         pass
     
@@ -457,36 +437,32 @@ def calculate_rsi(prices, period=14):
     rsi = 100 - (100 / (1 + rs))
     return round(rsi, 1)
 
-def create_candlestick_chart(df):
-    """Create candlestick chart with visual indicators for demo data"""
+def create_candlestick_chart(df, coin_name):
+    """Create candlestick chart with visual indicators"""
     if df.empty:
-        st.warning("No candlestick data available")
         return None
     
-    # Check if using demo data
     is_demo = 'data_source' in df and df['data_source'].iloc[0] == 'demo'
     
     fig = make_subplots(
         rows=2, cols=1,
         subplot_titles=(
-            f"ETH/USDT - 15min Candlesticks (24h) {'📊 [DEMO DATA]' if is_demo else ''}", 
-            f"Volume {'📊 [DEMO DATA]' if is_demo else ''}"
+            f"{coin_name} - 15min Candlesticks (24h) {'📊 [DEMO]' if is_demo else ''}", 
+            f"Volume {'📊 [DEMO]' if is_demo else ''}"
         ),
         vertical_spacing=0.1,
         row_heights=[0.7, 0.3]
     )
     
-    # Use different colors for demo data
     if is_demo:
-        # Demo data - use lighter, less saturated colors
-        candlestick_color = 'rgba(100,100,100,0.7)'
-        volume_color = 'rgba(150,150,250,0.4)'
+        inc_color = 'rgba(150,150,150,0.7)'
+        dec_color = 'rgba(100,100,100,0.7)'
+        vol_color = 'rgba(150,150,250,0.4)'
     else:
-        # Real data - use normal colors
-        candlestick_color = None
-        volume_color = 'rgba(0,150,250,0.6)'
+        inc_color = '#2CA02C'
+        dec_color = '#D62728'
+        vol_color = 'rgba(0,150,250,0.6)'
     
-    # Candlestick
     fig.add_trace(
         go.Candlestick(
             x=df['timestamp'],
@@ -494,26 +470,25 @@ def create_candlestick_chart(df):
             high=df['high'],
             low=df['low'],
             close=df['close'],
-            name='ETH/USDT',
-            increasing_line_color= candlestick_color or '#2CA02C',
-            decreasing_line_color= candlestick_color or '#D62728'
+            name=coin_name,
+            increasing_line_color=inc_color,
+            decreasing_line_color=dec_color
         ),
         row=1, col=1
     )
     
-    # Volume
     fig.add_trace(
         go.Bar(
             x=df['timestamp'],
             y=df['volume'],
             name='Volume',
-            marker_color=volume_color
+            marker_color=vol_color
         ),
         row=2, col=1
     )
     
     fig.update_layout(
-        title=f"ETH Trading Chart {'📊 [DEMO DATA]' if is_demo else ''}",
+        title=f"{coin_name} Chart {'📊 [DEMO DATA]' if is_demo else ''}",
         xaxis_rangeslider_visible=False,
         height=600,
         showlegend=False
@@ -522,26 +497,21 @@ def create_candlestick_chart(df):
     return fig
 
 def create_volume_chart(volume_data):
-    """Create volume comparison chart with visual indicators"""
+    """Create volume comparison chart"""
     if not volume_data:
-        st.warning("No volume data available")
         return None
     
-    # Check if using demo data
     is_demo = any('source' in volume_data[crypto] and volume_data[crypto]['source'] == 'demo' 
-                 for crypto in volume_data if crypto in volume_data)
+                 for crypto in volume_data)
     
     fig = go.Figure()
-    
-    # Get all dates (should be same for all cryptos)
     first_crypto = list(volume_data.keys())[0]
     dates = volume_data[first_crypto]['dates']
     
-    # Use different colors for demo data
     if is_demo:
-        colors = ['#888888', '#aaaaaa', '#cccccc']  # Grayscale for demo
+        colors = ['#888888', '#aaaaaa', '#cccccc']
     else:
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
     
     for i, date in enumerate(dates):
         crypto_names = []
@@ -562,7 +532,7 @@ def create_volume_chart(volume_data):
         )
     
     fig.update_layout(
-        title=f"Volume Comparison - Top 5 Cryptocurrencies (Last 3 Days) {'📊 [DEMO DATA]' if is_demo else ''}",
+        title=f"Volume Comparison {'📊 [DEMO]' if is_demo else ''}",
         xaxis_title="Cryptocurrency",
         yaxis_title="Volume (Millions)",
         barmode='group',
@@ -572,75 +542,68 @@ def create_volume_chart(volume_data):
     return fig
 
 def display_ai_forecast(forecast):
-    """Display AI forecast in a nice format"""
+    """Display AI forecast"""
     if not forecast:
-        st.warning("⚠️ AI forecasting unavailable. Set DEEPSEEK_API_KEY to enable.")
         return
+    
+    is_demo = forecast.get('source') == 'demo'
     
     st.subheader("🤖 AI Forecasts")
     
-    # Check if using demo data (due to API failure)
-    is_demo = forecast.get('source') == 'demo'
-    
     if is_demo:
-        st.warning("📊 Using demo forecast data (API unavailable)")
+        st.warning("📊 Using demo forecast data")
     
-    # Create columns for forecasts
     col1, col2 = st.columns(2)
     
     with col1:
-        # 4-hour forecast
         forecast_4h = forecast['forecast_4h']
+        color = "off" if is_demo else "normal"
         if forecast_4h == 'BULLISH':
-            st.metric("4-Hour", "🟢 BULLISH", help="AI suggests upward movement", delta_color="off" if is_demo else "normal")
+            st.metric("4-Hour", "🟢 BULLISH", delta_color=color)
         elif forecast_4h == 'BEARISH':
-            st.metric("4-Hour", "🔴 BEARISH", help="AI suggests downward movement", delta_color="off" if is_demo else "normal")
+            st.metric("4-Hour", "🔴 BEARISH", delta_color=color)
         else:
-            st.metric("4-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement", delta_color="off" if is_demo else "normal")
+            st.metric("4-Hour", "🟡 NEUTRAL", delta_color=color)
     
     with col2:
-        # 24-hour forecast
         forecast_24h = forecast['forecast_24h']
         if forecast_24h == 'BULLISH':
-            st.metric("24-Hour", "🟢 BULLISH", help="AI suggests upward movement", delta_color="off" if is_demo else "normal")
+            st.metric("24-Hour", "🟢 BULLISH", delta_color=color)
         elif forecast_24h == 'BEARISH':
-            st.metric("24-Hour", "🔴 BEARISH", help="AI suggests downward movement", delta_color="off" if is_demo else "normal")  
+            st.metric("24-Hour", "🔴 BEARISH", delta_color=color)  
         else:
-            st.metric("24-Hour", "🟡 NEUTRAL", help="AI suggests sideways movement", delta_color="off" if is_demo else "normal")
+            st.metric("24-Hour", "🟡 NEUTRAL", delta_color=color)
     
-    # Display detailed analysis
     st.subheader("🔍 AI Analysis")
     
     with st.expander("View Detailed Analysis", expanded=True):
         if is_demo:
-            st.warning("📊 This is demo analysis data (API unavailable)")
+            st.warning("📊 This is demo analysis data")
         st.text(forecast['full_analysis'])
     
-    # Risk level
     risk_color = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}
     risk_emoji = risk_color.get(forecast['risk_level'], "🟡")
     st.metric("Risk Level", f"{risk_emoji} {forecast['risk_level']}", delta_color="off" if is_demo else "normal")
     
-    st.caption(f"AI Analysis updated: {forecast['timestamp']}")
+    st.caption(f"Analysis updated: {forecast['timestamp']}")
 
 def main():
-    # Title
-    st.title("📈 ETH Analysis Dashboard")
-    st.markdown("Real-time cryptocurrency analysis with AI-powered forecasting")
+    st.title("📈 Crypto Analysis Dashboard")
+    st.markdown("Multi-coin cryptocurrency analysis with AI-powered forecasting")
     
-    # Display current data source with visual indicator
+    # Display current data source
     source = st.session_state.data_source
     source_status = {
         "binance": "✅ Binance API",
-        "cryptocompare": "⚠️ CryptoCompare (Fallback)",
-        "demo": "📊 Demo Data (APIs blocked)",
+        "cryptocompare": "⚠️ CryptoCompare",
+        "demo": "📊 Demo Data",
         "binance_blocked": "❌ Binance Blocked"
     }
     
     st.sidebar.info(f"**Data Source**: {source_status.get(source, 'Unknown')}")
     
     if source == "demo":
-        st.sidebar.warning("📊 Using demo data - APIs are blocked")
+        st.sidebar.warning("📊 Using demo data - APIs blocked")
     
     # Sidebar
     with st.sidebar:
@@ -650,125 +613,124 @@ def main():
             st.cache_data.clear()
             st.rerun()
         
-        # AI Configuration
+        # Coin selection
+        st.markdown("---")
+        st.subheader("🎯 Select Coin")
+        selected = st.selectbox(
+            "Choose cryptocurrency:",
+            options=list(CRYPTO_SYMBOLS.keys()),
+            format_func=lambda x: CRYPTO_SYMBOLS[x],
+            index=list(CRYPTO_SYMBOLS.keys()).index(st.session_state.selected_coin)
+        )
+        st.session_state.selected_coin = selected
+        
+        # AI Settings
         st.markdown("---")
         st.subheader("🤖 AI Settings")
         
-        # Check OpenAI setup
-        ai_status = "❌ Not Available"
-        if OPENAI_AVAILABLE:
-            api_key = get_deepseek_api_key()
-            if api_key:
-                ai_status = "✅ Active (Deepseek)"
-                st.success("Deepseek API Connected")
-            else:
-                ai_status = "⚠️ API Key Missing"
-                st.warning("Set DEEPSEEK_API_KEY for AI forecasts")
-                with st.expander("Setup Instructions"):
-                    st.code("export DEEPSEEK_API_KEY='your-deepseek-key'")
-                    st.code("# or in Streamlit Cloud Secrets:")
-                    st.code("DEEPSEEK_API_KEY = 'your-deepseek-key'")
+        groq_key = get_groq_api_key()
+        if groq_key:
+            st.success("Groq API Connected")
+            st.info("AI forecasts available on demand")
         else:
-            st.error("OpenAI package not installed")
-            st.code("pip install openai")
+            st.warning("Set GROQ_API_KEY for AI forecasts")
+            with st.expander("Setup Instructions"):
+                st.code("export GROQ_API_KEY='your-groq-key'")
+                st.code("# or in Streamlit Cloud Secrets:")
+                st.code("GROQ_API_KEY = 'your-groq-key'")
         
-        st.info(f"**AI Status**: {ai_status}")
         st.info("**Chart Update**: Every 5 minutes")
-        st.info("**AI Update**: Every 30 minutes")
     
-    # Main content layout
+    # Main content
     # Row 1: Chart and current analysis
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        st.subheader("📊 ETH Candlestick Chart")
+        # Coin selection buttons
+        st.subheader("📊 Candlestick Chart")
         
-        # Load candlestick data
-        with st.spinner("Loading chart data..."):
-            df = fetch_eth_candlestick_data()
+        # Create buttons for coin selection
+        cols = st.columns(5)
+        for i, (symbol, name) in enumerate(CRYPTO_SYMBOLS.items()):
+            if cols[i].button(f"{name.split()[0]}", key=f"btn_{symbol}"):
+                st.session_state.selected_coin = symbol
+                st.rerun()
+        
+        # Load chart data
+        coin_name = CRYPTO_SYMBOLS.get(st.session_state.selected_coin, st.session_state.selected_coin)
+        with st.spinner(f"Loading {coin_name} data..."):
+            df = fetch_candlestick_data(st.session_state.selected_coin)
         
         if not df.empty:
-            fig = create_candlestick_chart(df)
+            fig = create_candlestick_chart(df, coin_name)
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.error("Could not load candlestick data")
+            st.error("Could not load chart data")
     
     with col2:
         st.subheader("💹 Current Metrics")
         
-        # Load current analysis
-        analysis = get_eth_analysis()
+        analysis = get_crypto_analysis(st.session_state.selected_coin)
         
         if analysis:
-            # Convert to float to ensure proper formatting
+            is_demo = analysis.get('source') == 'demo'
             price = float(analysis['price'])
             change = float(analysis['change_24h'])
             volume = float(analysis['volume_24h'])
             
-            # Check if demo data
-            is_demo = analysis.get('source') == 'demo'
+            # Style for demo data
+            price_style = "color: #ff6b6b; text-decoration: line-through;" if is_demo else ""
             
-            st.metric(
-                label="ETH Price",
-                value=f"${price:,.2f}",
-                delta=f"{change:+.2f}%",
-                delta_color="off" if is_demo else "normal"
-            )
+            st.markdown(f"""
+            <div style="{price_style}">
+                <h3 style="margin-bottom: 0;">${price:,.2f}</h3>
+                <p style="color: {'#ff6b6b' if is_demo else ('#4ecdc4' if change >= 0 else '#ff6b6b')}; 
+                          margin: 0;">
+                    {change:+.2f}%
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.metric(
                 label="24h Volume",
-                value=f"{volume/1000:.0f}K ETH",
+                value=f"{volume/1000:.0f}K",
                 delta_color="off" if is_demo else "normal"
             )
             
-            # RSI with color coding
             rsi = analysis['rsi']
-            if rsi > 70:
-                st.metric("RSI", f"{rsi} 🔴", help="Overbought", delta_color="off" if is_demo else "normal")
-            elif rsi < 30:
-                st.metric("RSI", f"{rsi} 🟢", help="Oversold", delta_color="off" if is_demo else "normal") 
-            else:
-                st.metric("RSI", f"{rsi} 🟡", help="Neutral", delta_color="off" if is_demo else "normal")
+            rsi_color = "#ff6b6b" if rsi > 70 else "#4ecdc4" if rsi < 30 else "#f9c74f"
+            st.markdown(f"""
+            <div style="text-align: center;">
+                <p style="margin: 0; font-size: 0.9em;">RSI</p>
+                <h3 style="margin: 0; color: {rsi_color};">
+                    {rsi} {"🔴" if rsi > 70 else "🟢" if rsi < 30 else "🟡"}
+                </h3>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.caption(f"Updated: {analysis['timestamp']}")
             if is_demo:
-                st.caption("📊 Demo data - APIs unavailable")
-            else:
-                st.caption(f"Source: {analysis.get('source', 'Unknown')}")
+                st.caption("📊 Demo data")
         else:
-            st.error("Could not load analysis data")
+            st.error("Could not load analysis")
     
-    # Row 2: AI Forecasting Section (only if OpenAI is available)
-    if OPENAI_AVAILABLE:
-        st.markdown("---")
-        st.subheader("🤖 AI Forecasting")
-        
-        # Load and display AI forecast
-        with st.spinner("Generating AI forecast..."):
-            forecast = get_ai_forecast()
-        
-        if forecast:
+    # Row 2: AI Forecasting (collapsible)
+    st.markdown("---")
+    
+    # Collapsible AI section
+    if st.button("🤖 AI Forecasting ▶", key="ai_toggle"):
+        st.session_state.show_ai_forecast = not st.session_state.show_ai_forecast
+    
+    if st.session_state.show_ai_forecast:
+        if st.button("🔄 Generate AI Forecast", type="primary"):
+            with st.spinner("Generating AI forecast..."):
+                forecast = get_ai_forecast()
             display_ai_forecast(forecast)
         else:
-            # Show demo forecast if API fails
-            st.warning("⚠️ Using demo forecast data (API unavailable)")
-            demo_forecast = {
-                'forecast_4h': 'NEUTRAL',
-                'forecast_24h': 'NEUTRAL', 
-                'confidence_4h': 50,
-                'confidence_24h': 50,
-                'risk_level': 'Moderate',
-                'full_analysis': "Demo analysis: Market conditions suggest sideways movement. Monitor key support and resistance levels.",
-                'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
-                'source': 'demo'
-            }
-            display_ai_forecast(demo_forecast)
-    else:
-        st.markdown("---")
-        st.info("🤖 Install OpenAI package for AI forecasting: `pip install openai`")
+            st.info("Click the button above to generate an AI forecast")
     
-    # Row 3: Volume comparison section
+    # Row 3: Volume comparison
     st.markdown("---")
     st.subheader("📊 Volume Comparison")
     
@@ -779,12 +741,10 @@ def main():
         fig = create_volume_chart(volume_data)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Volume comparison data not available")
     
     # Footer
     st.markdown("---")
-    st.caption("⚠️ This dashboard is for educational purposes. Not financial advice.")
+    st.caption("⚠️ Educational purposes only. Not financial advice.")
 
 if __name__ == "__main__":
     main()
