@@ -263,25 +263,42 @@ def fetch_crypto_volumes():
 
 @st.cache_data(ttl=60)
 def get_crypto_analysis(symbol="ETHUSDT"):
-    """Get current analysis for selected crypto"""
+    """Get current analysis for selected crypto with proper fallbacks"""
     try:
+        # First try Binance directly for ticker data
         url = "https://api.binance.com/api/v3/ticker/24hr"
         params = {'symbol': symbol}
         
-        data, source = get_data_with_fallbacks(url, params, "ticker")
+        # Use the same robust session as candlestick data
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+        }
         
-        if data is None:
-            return None
+        session = create_robust_session()
+        response = session.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
         
+        # If we get here, Binance worked!
         price = float(data['lastPrice'])
         change = float(data.get('priceChangePercent', 0))
         volume = float(data.get('volume', 50000))
         
-        if source == "demo":
-            prices = [price + np.random.normal(0, price*0.02) for _ in range(30)]
-        else:
-            prices = [price]
+        # Get historical data for RSI from the same source
+        kline_url = "https://api.binance.com/api/v3/klines"
+        kline_params = {
+            'symbol': symbol,
+            'interval': '1h',
+            'limit': 30
+        }
         
+        kline_response = session.get(kline_url, params=kline_params, headers=headers, timeout=10)
+        kline_response.raise_for_status()
+        kline_data = kline_response.json()
+        
+        # Calculate RSI from historical prices
+        prices = [float(candle[4]) for candle in kline_data]  # closing prices
         rsi = calculate_rsi(prices)
         
         return {
@@ -290,13 +307,64 @@ def get_crypto_analysis(symbol="ETHUSDT"):
             'volume_24h': volume,
             'rsi': rsi,
             'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
-            'source': source,
-            'symbol': symbol
+            'source': 'binance'
         }
         
     except Exception as e:
-        st.error(f"Error getting analysis: {e}")
-        return None
+        # If Binance fails, try alternative approach
+        st.warning(f"Binance ticker failed, using fallback: {e}")
+        return get_crypto_analysis_fallback(symbol)
+
+def get_crypto_analysis_fallback(symbol="ETHUSDT"):
+    """Fallback method using candlestick data for metrics"""
+    try:
+        # Get the latest candlestick data (which we know works)
+        df = fetch_candlestick_data(symbol)
+        
+        if df.empty:
+            return None
+        
+        # Use the most recent candle for metrics
+        latest = df.iloc[-1]
+        price = latest['close']
+        
+        # Calculate 24h change from first to last candle
+        if len(df) > 1:
+            first_price = df.iloc[0]['close']
+            change = ((price - first_price) / first_price) * 100
+        else:
+            change = 0
+        
+        # Use volume from latest candle (approximate)
+        volume = latest['volume'] * 96  # Approximate 24h volume
+        
+        # Generate RSI from available data
+        prices = df['close'].tolist()
+        rsi = calculate_rsi(prices)
+        
+        return {
+            'price': price,
+            'change_24h': change,
+            'volume_24h': volume,
+            'rsi': rsi,
+            'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
+            'source': 'binance_candle'
+        }
+        
+    except Exception as e:
+        st.error(f"All analysis methods failed: {e}")
+        # Ultimate fallback - demo data
+        base_price = 2500 if "ETH" in symbol else 50000 if "BTC" in symbol else 300 if "BNB" in symbol else 0.5 if "ADA" in symbol else 100
+        price = base_price + np.random.normal(0, base_price*0.02)
+        
+        return {
+            'price': price,
+            'change_24h': np.random.normal(0, 2),
+            'volume_24h': 50000 + np.random.normal(0, 10000),
+            'rsi': 50,
+            'timestamp': datetime.now().strftime('%H:%M:%S UTC'),
+            'source': 'demo'
+        }
 
 def get_ai_forecast():
     """Get AI-powered forecast using Groq"""
@@ -672,21 +740,31 @@ def main():
         st.subheader("💹 Current Metrics")
         
         analysis = get_crypto_analysis(st.session_state.selected_coin)
-        
+       # In the metrics section, replace the display code with:
+
         if analysis:
             is_demo = analysis.get('source') == 'demo'
+            is_fallback = analysis.get('source') == 'binance_candle'
             price = float(analysis['price'])
             change = float(analysis['change_24h'])
             volume = float(analysis['volume_24h'])
             
-            # Style for demo data
-            price_style = "color: #ff6b6b; text-decoration: line-through;" if is_demo else ""
+            # Style for different data sources
+            if is_demo:
+                price_style = "color: #ff6b6b; text-decoration: line-through;"
+                source_text = "📊 Demo data"
+            elif is_fallback:
+                price_style = "color: #f9c74f;"  # Yellow for fallback
+                source_text = "⚠️ Estimated from chart data"
+            else:
+                price_style = ""
+                source_text = "✅ Live data"
             
             st.markdown(f"""
             <div style="{price_style}">
                 <h3 style="margin-bottom: 0;">${price:,.2f}</h3>
                 <p style="color: {'#ff6b6b' if is_demo else ('#4ecdc4' if change >= 0 else '#ff6b6b')}; 
-                          margin: 0;">
+                        margin: 0;">
                     {change:+.2f}%
                 </p>
             </div>
@@ -710,10 +788,7 @@ def main():
             """, unsafe_allow_html=True)
             
             st.caption(f"Updated: {analysis['timestamp']}")
-            if is_demo:
-                st.caption("📊 Demo data")
-        else:
-            st.error("Could not load analysis")
+            st.caption(source_text) 
     
     # Row 2: AI Forecasting (collapsible)
     st.markdown("---")
