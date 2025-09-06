@@ -191,9 +191,9 @@ def convert_cryptocompare_data(data):
             item['high'],
             item['low'],
             item['close'],
-            item['volumeto'],
+            item['volumefrom'],  # Use volumefrom (base currency volume) instead of volumeto
             item['time'] * 1000,
-            item['volumefrom'],
+            item['volumeto'],    # volumeto goes to quote_volume field
             0, 0, 0, 0
         ])
     return converted_data
@@ -374,7 +374,28 @@ def get_crypto_analysis(symbol="ETHUSDT"):
         else:
             change = 0
         
-        volume_24h = df['volume'].sum()
+        # Calculate volume based on data source
+        if source == "binance":
+            volume_24h = df['volume'].sum()
+        elif source == "cryptocompare":
+            # For CryptoCompare, use volumefrom (base currency volume)
+            volume_24h = df['volume'].sum()
+        else:
+            # For demo data, use the sum of volumes
+            volume_24h = df['volume'].sum()
+        
+        # If volume is suspiciously low or zero, try to get it from ticker endpoint
+        if volume_24h < 1000 and source in ["binance", "cryptocompare"]:
+            try:
+                ticker_data, _ = get_data_with_fallbacks(
+                    "https://api.binance.com/api/v3/ticker/24hr",
+                    {'symbol': symbol},
+                    "ticker"
+                )
+                if ticker_data and 'volume' in ticker_data:
+                    volume_24h = float(ticker_data['volume'])
+            except:
+                pass  # Keep the original volume if ticker fails
         
         prices = df['close'].tolist()
         rsi = calculate_rsi(prices)
@@ -840,11 +861,32 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
+            # Debug: Show volume calculation details
+            volume_debug = f"Volume: {volume:,.0f} (Source: {analysis.get('source', 'unknown')})"
+            
+            # Better volume formatting
+            if volume >= 1000000:
+                volume_display = f"{volume/1000000:.1f}M"
+            elif volume >= 1000:
+                volume_display = f"{volume/1000:.0f}K"
+            else:
+                volume_display = f"{volume:.0f}"
+            
             st.metric(
                 label="24h Volume",
-                value=f"{volume/1000:.0f}K",
+                value=volume_display,
                 delta_color="off" if is_demo else "normal"
             )
+            
+            # Show debug info in expander
+            with st.expander("🔍 Volume Debug Info"):
+                st.text(volume_debug)
+                st.text(f"Raw volume value: {volume}")
+                st.text(f"Data source: {analysis.get('source', 'unknown')}")
+                if analysis.get('source') == 'cryptocompare':
+                    st.warning("Using CryptoCompare data - volume may be different from Binance")
+                elif analysis.get('source') == 'demo':
+                    st.warning("Using demo data - volume is simulated")
             
             rsi = analysis['rsi']
             rsi_color = "#ff6b6b" if rsi > 70 else "#4ecdc4" if rsi < 30 else "#f9c74f"
