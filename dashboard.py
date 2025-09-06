@@ -24,6 +24,10 @@ st.set_page_config(
     layout="wide"
 )
 
+# Global DEBUG variable - set to True to show debug information
+# Change this to True to enable debug sections in the web interface
+DEBUG = False
+
 # Global variables
 if 'data_source' not in st.session_state:
     st.session_state.data_source = "binance"
@@ -878,15 +882,16 @@ def main():
                 delta_color="off" if is_demo else "normal"
             )
             
-            # Show debug info in expander
-            with st.expander("🔍 Volume Debug Info"):
-                st.text(volume_debug)
-                st.text(f"Raw volume value: {volume}")
-                st.text(f"Data source: {analysis.get('source', 'unknown')}")
-                if analysis.get('source') == 'cryptocompare':
-                    st.warning("Using CryptoCompare data - volume may be different from Binance")
-                elif analysis.get('source') == 'demo':
-                    st.warning("Using demo data - volume is simulated")
+            # Show debug info in expander only if DEBUG is True
+            if DEBUG:
+                with st.expander("🔍 Volume Debug Info"):
+                    st.text(volume_debug)
+                    st.text(f"Raw volume value: {volume}")
+                    st.text(f"Data source: {analysis.get('source', 'unknown')}")
+                    if analysis.get('source') == 'cryptocompare':
+                        st.warning("Using CryptoCompare data - volume may be different from Binance")
+                    elif analysis.get('source') == 'demo':
+                        st.warning("Using demo data - volume is simulated")
             
             rsi = analysis['rsi']
             rsi_color = "#ff6b6b" if rsi > 70 else "#4ecdc4" if rsi < 30 else "#f9c74f"
